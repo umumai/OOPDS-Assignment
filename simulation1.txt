@@ -1,5 +1,5 @@
 M by N : 20 30
-steps: 50
+steps: 20
 robots: 5
 AggressiveRobot Blade 3 6
 SniperRobot Hawk 5 5

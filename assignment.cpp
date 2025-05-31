@@ -22,18 +22,27 @@ Phone: 018-9107032
 #include <map>
 #include <set>
 #include <climits>
+#include <chrono>
+#include <thread>
 
 using namespace std;
 
 int ROWS = 20;
 int COLS = 30;
-int STEPS = 50;
-int SEED = 12345;
+const int DEFAULT_STEPS = 10;  // Default number of steps
+int STEPS = DEFAULT_STEPS;     // Can be overridden by input file
+int SEED = 12345;  // Fixed seed for deterministic random number generation
 
-ofstream logFile("log.txt");
+ofstream logFile;  // Changed to not initialize here
+
 void log(const string& msg) {
     cout << msg << endl;
     logFile << msg << endl;
+}
+
+// Initialize random seed at program start
+void initializeRandom() {
+    srand(SEED);
 }
 
 class Battlefield;
@@ -111,9 +120,10 @@ private:
     vector<shared_ptr<Robot>> robots;
     queue<shared_ptr<Robot>> reentry;
     vector<vector<char>> grid;
+    bool allowReentry;  // New flag to control re-entry
 
 public:
-    Battlefield() {
+    Battlefield(bool allowReentry = true) : allowReentry(allowReentry) {
         grid = vector<vector<char>>(ROWS, vector<char>(COLS, '.'));
     }
 
@@ -154,15 +164,15 @@ public:
                 r->look(*this);
                 r->fire(*this);
                 r->move(*this);
-            } else {
+            } else if (allowReentry) {  // Only add to reentry queue if reentry is allowed
                 reentry.push(r);
             }
         }
 
-        while (!reentry.empty()) {
+        while (!reentry.empty() && allowReentry) {  // Only process reentry if allowed
             auto r = reentry.front(); reentry.pop();
             if (r->canReenter()) {
-                int x = srand(SEED) % ROWS, y = srand(SEED) % COLS;
+                int x = rand() % ROWS, y = rand() % COLS;
                 r->reviveAt(x, y);
                 log(r->getName() + " has re-entered!");
                 break;
@@ -352,7 +362,12 @@ void loadConfig(const string& filename, Battlefield& field) {
         if (line.find("M by N") != string::npos) {
             sscanf(line.c_str(), "M by N : %d %d", &ROWS, &COLS);
         } else if (line.find("steps") != string::npos) {
-            sscanf(line.c_str(), "steps: %d", &STEPS);
+            int fileSteps;
+            sscanf(line.c_str(), "steps: %d", &fileSteps);
+            if (fileSteps > 0) {  // Only override if the file specifies a valid number
+                STEPS = fileSteps;
+            }
+            log("Simulation will run for " + to_string(STEPS) + " steps");
         } else if (isalpha(line[0])) {
             string type, name, sx, sy;
             istringstream ss(line);
@@ -382,18 +397,229 @@ void loadConfig(const string& filename, Battlefield& field) {
     }
 }
 
+// Add these functions at the top level, before main()
+void clearScreen() {
+    #ifdef _WIN32
+        system("cls");
+    #else
+        system("clear");
+    #endif
+}
+
+void waitForInput() {
+    cout << "\nPress Enter to continue to next turn...";
+    cin.ignore(numeric_limits<streamsize>::max(), '\n');
+    cin.get();
+}
+
 // ======================= MAIN ============================
 int main() {
-    srand(time(0));
-    Battlefield field;
-    loadConfig("simulation.txt", field);
-
-    for (int t = 1; t <= STEPS; ++t) {
-        field.display(t);
-        field.simulateTurn();
+    initializeRandom();  // Set the fixed seed at program start, before ANY random number generation
+    
+    string inputFile;
+    string logFileName;
+    string endgameLogName;
+    bool endOnOneRobot = false;  // Flag to determine end game condition
+    
+    cout << "\n🤖 Welcome to the Robot War Simulator! 🤖\n" << endl;
+    cout << "Choose your battle scenario:\n" << endl;
+    cout << "1️⃣  Endurance Challenge" << endl;
+    cout << "    - Robots battle for a fixed number of rounds" << endl;
+    cout << "    - Multiple robots can survive until the end" << endl;
+    cout << "    - Perfect for testing robot durability!\n" << endl;
+    
+    cout << "2️⃣  Last Bot Standing" << endl;
+    cout << "    - Battle continues until only one robot remains" << endl;
+    cout << "    - No robot re-entry allowed - once you're out, you're out!" << endl;
+    cout << "    - The ultimate test of combat supremacy!\n" << endl;
+    
+    cout << "Enter your choice (1 or 2): ";
+    int choice;
+    cin >> choice;
+    
+    if (choice == 1) {
+        inputFile = "simulation1.txt";
+        logFileName = "log1.txt";
+        endgameLogName = "endgame1.txt";
+        endOnOneRobot = false;  // End on max turns
+        cout << "\n⚔️  Starting Endurance Challenge! ⚔️" << endl;
+    } else if (choice == 2) {
+        inputFile = "simulation2.txt";
+        logFileName = "log2.txt";
+        endgameLogName = "endgame2.txt";
+        endOnOneRobot = true;   // End when one robot remains
+        cout << "\n🏆 Starting Last Bot Standing! 🏆" << endl;
+    } else {
+        cout << "\n⚠️  Invalid choice. Defaulting to Endurance Challenge." << endl;
+        inputFile = "simulation1.txt";
+        logFileName = "log1.txt";
+        endgameLogName = "endgame1.txt";
+        endOnOneRobot = false;
     }
+    
+    // Open the main log file
+    logFile.open(logFileName);
+    if (!logFile.is_open()) {
+        cerr << "Error: Could not open log file " << logFileName << endl;
+        return 1;
+    }
+    
+    // Open the endgame log file
+    ofstream endgameLog(endgameLogName);
+    if (!endgameLog.is_open()) {
+        cerr << "Error: Could not open endgame log file " << endgameLogName << endl;
+        return 1;
+    }
+    
+    endgameLog << "=== Robot War Tournament Results ===\n" << endl;
+    
+    // Run 3 complete games
+    for (int game = 1; game <= 3; game++) {
+        endgameLog << "\n=== Game " << game << " ===\n" << endl;
+        log("\n=== Starting Game " + to_string(game) + " ===\n");
+        
+        Battlefield field(!endOnOneRobot);  // Disable reentry for simulation2.txt
+        loadConfig(inputFile, field);
 
-    log("=== Simulation Completed ===");
+        cout << "\nStarting Game " << game << " of 3..." << endl;
+        cout << "Simulation Controls:" << endl;
+        cout << "- Press Enter to advance to next turn" << endl;
+        cout << "- Type 'q' and press Enter to quit" << endl;
+        cout << "- Type 'a' and press Enter for auto-play mode" << endl;
+        cout << "- Type 's' and press Enter to skip to end of current game" << endl;
+        cout << "\nStarting simulation in 3 seconds...\n" << endl;
+        this_thread::sleep_for(chrono::seconds(3));
+        
+        bool autoPlay = false;
+        bool skipToEnd = false;
+        int t = 1;
+        while (true) {  // Infinite loop for simulation2.txt
+            if (!skipToEnd) {
+                clearScreen();
+                field.display(t);
+                field.simulateTurn();
+            } else {
+                // Fast forward to end
+                field.simulateTurn();
+            }
+            
+            // Check end game conditions based on selected file
+            if (endOnOneRobot) {
+                // Count alive robots
+                int aliveCount = 0;
+                for (auto& r : field.getRobots()) {
+                    if (r->isAlive()) aliveCount++;
+                }
+                
+                // Stop if only one robot remains
+                if (aliveCount <= 1) {
+                    if (skipToEnd) {
+                        clearScreen();
+                        field.display(t);
+                    }
+                    log("=== Game " + to_string(game) + " Ended - Only One Robot Remains ===");
+                    break;
+                }
+            } else if (t >= STEPS) {  // For simulation1.txt, end after STEPS
+                if (skipToEnd) {
+                    clearScreen();
+                    field.display(t);
+                }
+                break;
+            }
+            
+            if (!autoPlay && !skipToEnd) {
+                cout << "\nGame " << game << " - Turn " << t << " completed. ";
+                cout << "Press Enter to continue, 'a' for auto-play, 's' to skip to end, or 'q' to quit: ";
+                string input;
+                getline(cin, input);
+                
+                if (input == "q") {
+                    cout << "\nSimulation terminated by user." << endl;
+                    endgameLog.close();
+                    logFile.close();
+                    return 0;
+                } else if (input == "a") {
+                    autoPlay = true;
+                    cout << "\nAuto-play mode enabled. Press 'q' to quit." << endl;
+                } else if (input == "s") {
+                    skipToEnd = true;
+                    cout << "\nSkipping to end of current game..." << endl;
+                }
+            } else if (autoPlay) {
+                this_thread::sleep_for(chrono::milliseconds(500));  // Half second delay in auto-play
+                if (cin.rdbuf()->in_avail()) {  // Check if user pressed a key
+                    string input;
+                    getline(cin, input);
+                    if (input == "q") {
+                        cout << "\nSimulation terminated by user." << endl;
+                        endgameLog.close();
+                        logFile.close();
+                        return 0;
+                    }
+                }
+            }
+            
+            t++;
+        }
+
+        // Log game results
+        if (!endOnOneRobot) {
+            string result = "=== Game " + to_string(game) + " Completed - Reached Maximum Steps (" + to_string(STEPS) + ") ===\n";
+            log(result);
+            endgameLog << result;
+            
+            // Find surviving robots after max steps
+            vector<string> survivors;
+            for (auto& r : field.getRobots()) {
+                if (r->isAlive()) {
+                    survivors.push_back(r->getName());
+                }
+            }
+            
+            if (survivors.empty()) {
+                string msg = "No robots survived the simulation!";
+                log(msg);
+                endgameLog << msg << "\n";
+            } else {
+                string msg = "🏆 Surviving robots after " + to_string(STEPS) + " steps:";
+                log(msg);
+                endgameLog << msg << "\n";
+                for (const auto& name : survivors) {
+                    string botMsg = "- " + name;
+                    log(botMsg);
+                    endgameLog << botMsg << "\n";
+                }
+            }
+        } else {
+            string result = "=== Game " + to_string(game) + " Completed - Last Robot Standing ===\n";
+            log(result);
+            endgameLog << result;
+            
+            // Find the last surviving robot
+            for (auto& r : field.getRobots()) {
+                if (r->isAlive()) {
+                    string msg = "🏆 " + r->getName() + " is the last robot standing! 🏆";
+                    log(msg);
+                    endgameLog << msg << "\n";
+                    break;
+                }
+            }
+        }
+        
+        if (game < 3) {
+            cout << "\nGame " << game << " completed. Starting next game in 3 seconds..." << endl;
+            this_thread::sleep_for(chrono::seconds(3));
+        }
+    }
+    
+    endgameLog << "\n=== Tournament Complete ===\n";
+    cout << "\nAll games completed! Check " << endgameLogName << " for tournament results." << endl;
+    cout << "\nPress Enter to exit...";
+    cin.ignore(numeric_limits<streamsize>::max(), '\n');
+    cin.get();
+    
+    endgameLog.close();
     logFile.close();
     return 0;
 }
